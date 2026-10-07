@@ -1,0 +1,47 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!74 &7400000
+AnimationClip:
+  m_ObjectHideFlags: 0
+  m_Name: enemy_Slime
+  serializedVersion: 6
+  m_Legacy: 0
+  m_Compressed: 0
+  m_UseHighQualityCurve: 1
+  m_RotationCurves: []
+  m_CompressedRotationCurves: []
+  m_EulerCurves: []
+  m_PositionCurves: []
+  m_ScaleCurves: []
+  m_FloatCurves: []
+  m_PPtrCurves:
+  - serializedVersion: 2
+    curve:
+    - time: 0.00000
+      value: {fileID: 21300000, guid: 2eacfbad33b7cc274d5e24ba91c76fd5, type: 3}
+    - time: 0.14286
+      value: {fileID: 21300000, guid: 0bae5c0eccd36e6500821af57658913e, type: 3}
+    - time: 0.28571
+      value: {fileID: 21300000, guid: 22f02a02d693e5337785fecdbac64e53, type: 3}
+    - time: 0.42857
+      value: {fileID: 21300000, guid: d93f9519fa7ca63ca8187919317d83c5, type: 3}
+    - time: 0.57143
+      value: {fileID: 21300000, guid: 1cf9742be4ebc8f4a59c0736b65cf4ed, type: 3}
+    - time: 0.71429
+      value: {fileID: 21300000, guid: 41876834433335a7e1b0e8cd136ac64a, type: 3}
+    - time: 0.85714
+      value: {fileID: 21300000, guid: 1fa207eb998a30812fee46251fac63d5, type: 3}
+    - time: 1.00000
+      value: {fileID: 21300000, guid: 8dc65d7cb7887ac6d7f2378e331f6feb, type: 3}
+    attribute: m_Sprite
+    path:
+    classID: 212
+    script: {fileID: 0}
+  m_SampleRate: 60
+  m_WrapMode: 0
+  m_AnimationClipSettings:
+    serializedVersion: 2
+    m_StartTime: 0
+    m_StopTime: 1.14286
+    m_LoopTime: 1
+  m_Events: []
