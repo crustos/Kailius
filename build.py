@@ -1911,6 +1911,91 @@ MonoBehaviour:
 """
 
 
+
+ANIM_CLIP = """%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!74 &7400000
+AnimationClip:
+  m_ObjectHideFlags: 0
+  m_Name: {name}
+  serializedVersion: 6
+  m_Legacy: 0
+  m_Compressed: 0
+  m_UseHighQualityCurve: 1
+  m_RotationCurves: []
+  m_CompressedRotationCurves: []
+  m_EulerCurves: []
+  m_PositionCurves: []
+  m_ScaleCurves: []
+  m_FloatCurves: []
+  m_PPtrCurves:
+  - serializedVersion: 2
+    curve:
+{keys}    attribute: m_Sprite
+    path:
+    classID: 212
+    script: {{fileID: 0}}
+  m_SampleRate: 60
+  m_WrapMode: 0
+  m_AnimationClipSettings:
+    serializedVersion: 2
+    m_StartTime: 0
+    m_StopTime: {stop}
+    m_LoopTime: 1
+  m_Events: []
+"""
+
+ANIM_CONTROLLER = """%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!91 &9100000
+AnimatorController:
+  m_Name: {name}
+  m_AnimatorParameters: []
+  m_AnimatorLayers:
+  - serializedVersion: 5
+    m_Name: Base Layer
+    m_StateMachine: {{fileID: 1107000}}
+    m_Mask: {{fileID: 0}}
+    m_BlendingMode: 0
+    m_SyncedLayerIndex: -1
+    m_DefaultWeight: 0
+--- !u!1107 &1107000
+AnimatorStateMachine:
+  m_Name: Base Layer
+  m_ChildStates:
+  - serializedVersion: 1
+    m_State: {{fileID: 1102001}}
+  m_ChildStateMachines: []
+  m_AnyStateTransitions: []
+  m_EntryTransitions: []
+  m_DefaultState: {{fileID: 1102001}}
+--- !u!1102 &1102001
+AnimatorState:
+  m_Name: {name}
+  m_Speed: 1
+  m_CycleOffset: 0
+  m_Transitions: []
+  m_Motion: {{fileID: 7400000, guid: {clip}, type: 2}}
+"""
+
+ASSET_META = "fileFormatVersion: 2\nguid: {guid}\n"
+
+
+def write_animation(folder: Path, name: str, frames: List[str], fps: float, sprite_guid) -> str:
+    """A looping sprite-swap clip and a one-state controller that plays it; returns the controller's guid."""
+    folder.mkdir(parents=True, exist_ok=True)
+    clip_guid = hashlib.md5(f"kailius-authored/clip/{name}".encode()).hexdigest()
+    ctrl_guid = hashlib.md5(f"kailius-authored/controller/{name}".encode()).hexdigest()
+    step = 1.0 / max(fps, 1.0)
+    keys = "".join(f"    - time: {i * step:.5f}\n      value: {{fileID: 21300000, guid: {sprite_guid(f)}, type: 3}}\n"
+                   for i, f in enumerate(frames))
+    for file, text, guid in ((f"{name}.anim", ANIM_CLIP.format(name=name, keys=keys, stop=f"{len(frames) * step:.5f}"), clip_guid),
+                             (f"{name}.controller", ANIM_CONTROLLER.format(name=name, clip=clip_guid), ctrl_guid)):
+        (folder / file).write_text(text, encoding="utf-8", newline="\n")
+        (folder / (file + ".meta")).write_text(ASSET_META.format(guid=guid), encoding="utf-8", newline="\n")
+    return ctrl_guid
+
+
 class SceneWriter:
     """Collects the YAML of an authored scene: one GameObject per call, each with a Transform and any components."""
 
@@ -1927,7 +2012,8 @@ class SceneWriter:
     def game_object(self, name: str, x: float, y: float, sx: float = 1.0, sy: float = 1.0, tag: str = "Untagged",
                     sprite: Optional[str] = None, order: int = 0, body: Optional[dict] = None,
                     box: Optional[Tuple[float, float]] = None, circle: Optional[float] = None, trigger: bool = False,
-                    script: Optional[str] = None, fields: Optional[dict] = None) -> int:
+                    script: Optional[str] = None, fields: Optional[dict] = None,
+                    controller: Optional[str] = None) -> int:
         go, tf = self._id(), self._id()
         comps = [tf]
         extra: List[str] = []
@@ -1943,6 +2029,8 @@ class SceneWriter:
             add(212, "SpriteRenderer",
                 "  m_Enabled: 1\n  m_Color: {r: 1, g: 1, b: 1, a: 1}\n  m_FlipX: 0\n  m_FlipY: 0\n"
                 f"  m_SortingOrder: {order}\n  m_Sprite: {{fileID: 21300000, guid: {self.sprite_guid(sprite)}, type: 3}}\n")
+        if controller:
+            add(95, "Animator", f"  m_Enabled: 1\n  m_Controller: {{fileID: 9100000, guid: {controller}, type: 2}}\n")
         if body:
             add(50, "Rigidbody2D",
                 f"  m_BodyType: 0\n  m_Simulated: 1\n  m_Mass: 1\n  m_LinearDrag: {body.get('drag', 0)}\n"
@@ -2021,6 +2109,14 @@ def build_unity_authored(out: Path, unity_version: Optional[str], scene: Optiona
             SPRITE_META.format(guid=guids[spr["name"]], ppu=f"{ppu:g}"), encoding="utf-8", newline="\n")
     write_script_metas(out / "Assets" / "KailiusAuthored")
     frame = lambda key, i=0: atlas["sprites"][groups[key][0] + i]["name"]
+    anim_dir = out / "Assets" / "KailiusAuthored" / "Animations"
+    sprite_guid = lambda n: guids[n]
+
+    def animation(key: str, fps: float) -> str:
+        first, count = groups[key]
+        names = [atlas["sprites"][first + i]["name"] for i in range(count)]
+        return write_animation(anim_dir, key.replace(":", "_"), names, fps, sprite_guid)
+
     # script guids follow write_script_metas(folder): the path relative to the folder it was given
     w = SceneWriter(lambda n: guids[n], lambda n: hashlib.md5(f"kailius-mini/Scripts/{n}.cs".encode()).hexdigest())
 
@@ -2030,13 +2126,14 @@ def build_unity_authored(out: Path, unity_version: Optional[str], scene: Optiona
         w.game_object("Ground" if flat else "Platform", x + sw / 2, y + sh / 2, sw, sh, tag="Ground",
                       sprite=frame("tiles", 4), box=(1, 1))
         w.game_object("Grass", x + sw / 2, y + sh - 0.5, sw, 1, sprite=frame("tiles", 1), order=1)
+    ctrl_coin = animation("coin", 10.0)
     for cx, cy in data["coins"]:
-        w.game_object("Coin", cx, cy, tag="Coin", sprite=frame("coin"), circle=0.4, trigger=True)
+        w.game_object("Coin", cx, cy, tag="Coin", sprite=frame("coin"), controller=ctrl_coin, circle=0.4, trigger=True)
     for x, y, kind in data["enemies"]:
         d = data["kinds"][kind]
         under = [s for s in solids if s[0] <= x <= s[0] + s[2] and s[1] + s[3] <= y + 0.5]
         floor = max(under, key=lambda s: s[1] + s[3]) if under else (x - 3, 0, 6, 0)
-        w.game_object("Enemy_" + d["kind"], x, y, tag="Enemy", sprite=frame("enemy:" + d["kind"]), order=2,
+        w.game_object("Enemy_" + d["kind"], x, y, tag="Enemy", sprite=frame("enemy:" + d["kind"]), order=2, controller=animation("enemy:" + d["kind"], d["fps"]),
                       body={"gravity": d["gravityScale"]}, box=(d["width"], d["height"]),
                       script="AuthoredEnemy",
                       fields={"speed": d["speed"], "minX": f"{floor[0] + 0.8:.3f}",
@@ -2049,9 +2146,9 @@ def build_unity_authored(out: Path, unity_version: Optional[str], scene: Optiona
         w.game_object("TorchStick", tx + tuning.get("TorchStickX", 0), ty + tuning.get("TorchStickY", 0),
                       sprite=frame("torch_stick"), order=1)
         w.game_object("TorchFlame", tx + tuning.get("TorchFlameX", 0), ty + tuning.get("TorchFlameY", 0),
-                      sprite=frame("torch_flame"), order=2)
+                      sprite=frame("torch_flame"), order=2, controller=animation("torch_flame", tuning.get("TorchFps", 8.0)))
     px, py = data["portal"]
-    w.game_object("Portal", px, py, tag="Finish", sprite=frame("portal"), order=1, box=(2, 3), trigger=True)
+    w.game_object("Portal", px, py, tag="Finish", sprite=frame("portal"), order=1, controller=animation("portal", 8.0), box=(2, 3), trigger=True)
     sx, sy = data["spawn"]
     player = w.game_object(
         "Player", sx, sy, tag="Player", sprite=frame("player_idle"), order=3,
