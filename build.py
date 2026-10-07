@@ -1773,7 +1773,7 @@ def add_mini_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--unity-editor", help="path to the Unity executable (or set UNITY_EDITOR)")
     parser.add_argument("--build-target", default=default_build_target(),
                         choices=["linux64", "win64", "osx"], help="player platform for unity --build")
-    parser.add_argument("--scene", help="prowl2d: build this Unity scene (e.g. Scene_1) instead of the "
+    parser.add_argument("--scene", help="build this Unity scene (e.g. Scene_1) instead of the "
                         "hand-made mini level")
     parser.add_argument("--prowl2d", help="path to a Prowl2D checkout for prowl2d --build "
                         "(or set PROWL2D; default: ../Prowl2D)")
