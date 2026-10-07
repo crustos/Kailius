@@ -535,6 +535,30 @@ def unity_write_data(resources: Path, scene: Optional[str]) -> dict:
     return data
 
 
+SCRIPT_META = """fileFormatVersion: 2
+guid: {guid}
+MonoImporter:
+  externalObjects: {{}}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {{instanceID: 0}}
+  userData:
+  assetBundleName:
+  assetBundleVariant:
+"""
+
+
+def write_script_metas(folder: Path) -> None:
+    """A .meta for every script, with a guid derived from its path, so tools that read the project without opening it in
+    Unity (which would write them) see every script, and Unity keeps the same guids from run to run."""
+    for script in sorted(folder.rglob("*.cs")):
+        meta = script.with_name(script.name + ".meta")
+        if not meta.exists():
+            guid = hashlib.md5(("kailius-mini/" + script.relative_to(folder).as_posix()).encode()).hexdigest()
+            meta.write_text(SCRIPT_META.format(guid=guid), encoding="utf-8", newline="\n")
+
+
 def build_unity_mini(out: Path, unity_version: Optional[str], build: bool,
                      editor: Optional[str], build_target: str, scene: Optional[str] = None) -> Path:
     template = PORTS / "unity"
@@ -573,6 +597,7 @@ def build_unity_mini(out: Path, unity_version: Optional[str], build: bool,
             copied += 1
 
     unity_write_data(resources, scene)
+    write_script_metas(out / "Assets" / "KailiusMini")
     scripts = sorted((out / "Assets" / "KailiusMini").rglob("*.cs"))
     log(f"generated Unity project ({version}): {copied} assets, {len(scripts)} scripts")
     log(f"  project: {out}")
