@@ -1767,7 +1767,313 @@ def run_csharp_build(engine: str, game: Path, checkout: Optional[str]) -> None:
     log(f"  native player: {root / info['output'] / game.name / (engine + '-player')}")
 
 
+# --------------------------------------------------------------------------- #
+# Unity authored-scene export: the level as real GameObjects
+# --------------------------------------------------------------------------- #
+
+SPRITE_META = """fileFormatVersion: 2
+guid: {guid}
+TextureImporter:
+  serializedVersion: 10
+  mipmaps:
+    enableMipMap: 0
+  sRGBTexture: 1
+  alphaIsTransparency: 1
+  isReadable: 0
+  textureFormat: 4
+  maxTextureSize: 2048
+  textureSettings:
+    filterMode: 0
+    wrapU: 1
+    wrapV: 1
+  nPOTScale: 0
+  spriteMode: 1
+  spriteExtrude: 1
+  spriteMeshType: 1
+  alignment: 0
+  spritePivot: {{x: 0.5, y: 0.5}}
+  spritePixelsToUnits: {ppu}
+  textureType: 8
+  platformSettings:
+  - serializedVersion: 3
+    buildTarget: DefaultTexturePlatform
+    maxTextureSize: 2048
+    textureFormat: -1
+    textureCompression: 0
+    compressionQuality: 50
+"""
+
+TAG_MANAGER = """%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!78 &1
+TagManager:
+  serializedVersion: 2
+  tags:
+{tags}
+  layers:
+{layers}
+  m_SortingLayers:
+  - name: Default
+    uniqueID: 0
+    locked: 0
+"""
+
+AUTHORED_TAGS = ["Ground", "Enemy", "Coin", "Hazard"]
+AUTHORED_SCENE_CAMERA = """--- !u!1 &{go}
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {{fileID: 0}}
+  m_PrefabInstance: {{fileID: 0}}
+  m_PrefabAsset: {{fileID: 0}}
+  serializedVersion: 6
+  m_Component:
+  - component: {{fileID: {tf}}}
+  - component: {{fileID: {cam}}}
+  - component: {{fileID: {mb}}}
+  m_Layer: 0
+  m_Name: Main Camera
+  m_TagString: MainCamera
+  m_Icon: {{fileID: 0}}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &{tf}
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {{fileID: 0}}
+  m_PrefabInstance: {{fileID: 0}}
+  m_PrefabAsset: {{fileID: 0}}
+  m_GameObject: {{fileID: {go}}}
+  m_LocalRotation: {{x: 0, y: 0, z: 0, w: 1}}
+  m_LocalPosition: {{x: 0, y: 3, z: -10}}
+  m_LocalScale: {{x: 1, y: 1, z: 1}}
+  m_Children: []
+  m_Father: {{fileID: 0}}
+  m_RootOrder: 0
+  m_LocalEulerAnglesHint: {{x: 0, y: 0, z: 0}}
+--- !u!20 &{cam}
+Camera:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {{fileID: 0}}
+  m_PrefabInstance: {{fileID: 0}}
+  m_PrefabAsset: {{fileID: 0}}
+  m_GameObject: {{fileID: {go}}}
+  m_Enabled: 1
+  serializedVersion: 2
+  m_ClearFlags: 2
+  m_BackGroundColor: {{r: 0.45, g: 0.7, b: 0.95, a: 0}}
+  m_projectionMatrixMode: 1
+  m_GateFitMode: 2
+  m_FOVAxisMode: 0
+  m_SensorSize: {{x: 36, y: 24}}
+  m_LensShift: {{x: 0, y: 0}}
+  m_FocalLength: 50
+  m_NormalizedViewPortRect:
+    serializedVersion: 2
+    x: 0
+    y: 0
+    width: 1
+    height: 1
+  near clip plane: 0.3
+  far clip plane: 1000
+  field of view: 60
+  orthographic: 1
+  orthographic size: 8
+  m_Depth: -1
+  m_CullingMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_RenderingPath: -1
+  m_TargetTexture: {{fileID: 0}}
+  m_TargetDisplay: 0
+  m_TargetEye: 3
+  m_HDR: 1
+  m_AllowMSAA: 1
+  m_AllowDynamicResolution: 0
+  m_ForceIntoRT: 0
+  m_OcclusionCulling: 1
+  m_StereoConvergence: 10
+  m_StereoSeparation: 0.022
+--- !u!114 &{mb}
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {{fileID: 0}}
+  m_PrefabInstance: {{fileID: 0}}
+  m_PrefabAsset: {{fileID: 0}}
+  m_GameObject: {{fileID: {go}}}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {{fileID: 11500000, guid: {script}, type: 3}}
+  m_Name:
+  m_EditorClassIdentifier:
+  target: {{fileID: {target}}}
+  offsetY: 3
+"""
+
+
+class SceneWriter:
+    """Collects the YAML of an authored scene: one GameObject per call, each with a Transform and any components."""
+
+    def __init__(self, guid_of_sprite, script_guid) -> None:
+        self.parts: List[str] = []
+        self.next_id = 1000
+        self.sprite_guid, self.script_guid = guid_of_sprite, script_guid
+        self.roots = 0
+
+    def _id(self) -> int:
+        self.next_id += 1
+        return self.next_id
+
+    def game_object(self, name: str, x: float, y: float, sx: float = 1.0, sy: float = 1.0, tag: str = "Untagged",
+                    sprite: Optional[str] = None, order: int = 0, body: Optional[dict] = None,
+                    box: Optional[Tuple[float, float]] = None, circle: Optional[float] = None, trigger: bool = False,
+                    script: Optional[str] = None, fields: Optional[dict] = None) -> int:
+        go, tf = self._id(), self._id()
+        comps = [tf]
+        extra: List[str] = []
+
+        def add(kind: int, name_: str, body_text: str) -> int:
+            fid = self._id()
+            comps.append(fid)
+            extra.append(f"--- !u!{kind} &{fid}\n{name_}:\n  m_ObjectHideFlags: 0\n  m_GameObject: {{fileID: {go}}}\n"
+                         + body_text)
+            return fid
+
+        if sprite:
+            add(212, "SpriteRenderer",
+                "  m_Enabled: 1\n  m_Color: {r: 1, g: 1, b: 1, a: 1}\n  m_FlipX: 0\n  m_FlipY: 0\n"
+                f"  m_SortingOrder: {order}\n  m_Sprite: {{fileID: 21300000, guid: {self.sprite_guid(sprite)}, type: 3}}\n")
+        if body:
+            add(50, "Rigidbody2D",
+                f"  m_BodyType: 0\n  m_Simulated: 1\n  m_Mass: 1\n  m_LinearDrag: {body.get('drag', 0)}\n"
+                f"  m_AngularDrag: 0.05\n  m_GravityScale: {body['gravity']}\n  m_Material: {{fileID: 0}}\n"
+                "  m_Interpolate: 0\n  m_SleepingMode: 1\n  m_CollisionDetection: 0\n  m_Constraints: 4\n")
+        if box:
+            add(61, "BoxCollider2D",
+                f"  m_Enabled: 1\n  m_IsTrigger: {int(trigger)}\n  m_Offset: {{x: 0, y: 0}}\n"
+                f"  m_Size: {{x: {box[0]:.5f}, y: {box[1]:.5f}}}\n")
+        if circle:
+            add(58, "CircleCollider2D",
+                f"  m_Enabled: 1\n  m_IsTrigger: {int(trigger)}\n  m_Offset: {{x: 0, y: 0}}\n  m_Radius: {circle}\n")
+        if script:
+            lines = "".join(f"  {k}: {v}\n" for k, v in (fields or {}).items())
+            add(114, "MonoBehaviour",
+                "  m_Enabled: 1\n  m_EditorHideFlags: 0\n"
+                f"  m_Script: {{fileID: 11500000, guid: {self.script_guid(script)}, type: 3}}\n"
+                "  m_Name:\n  m_EditorClassIdentifier:\n" + lines)
+        head = (f"--- !u!1 &{go}\nGameObject:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {{fileID: 0}}\n"
+                "  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  serializedVersion: 6\n  m_Component:\n"
+                + "".join(f"  - component: {{fileID: {c}}}\n" for c in comps)
+                + f"  m_Layer: 0\n  m_Name: {name}\n  m_TagString: {tag}\n  m_Icon: {{fileID: 0}}\n"
+                "  m_NavMeshLayer: 0\n  m_StaticEditorFlags: 0\n  m_IsActive: 1\n"
+                f"--- !u!4 &{tf}\nTransform:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {{fileID: 0}}\n"
+                f"  m_PrefabInstance: {{fileID: 0}}\n  m_PrefabAsset: {{fileID: 0}}\n  m_GameObject: {{fileID: {go}}}\n"
+                "  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n"
+                f"  m_LocalPosition: {{x: {x:.5f}, y: {y:.5f}, z: 0}}\n  m_LocalScale: {{x: {sx:.5f}, y: {sy:.5f}, z: 1}}\n"
+                f"  m_Children: []\n  m_Father: {{fileID: 0}}\n  m_RootOrder: {self.roots + 1}\n"
+                "  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}\n")
+        self.roots += 1
+        self.parts.append(head + "".join(extra))
+        self.last_transform = tf
+        return tf
+
+
+def build_unity_authored(out: Path, unity_version: Optional[str], scene: Optional[str] = None) -> Path:
+    """A Unity project whose scene holds the whole level as authored GameObjects (SpriteRenderer, Rigidbody2D,
+    BoxCollider2D/CircleCollider2D, a few tiny scripts), one PNG per sprite. Nothing is built at run time, so tools
+    that pack the authored scene (tools/unity_pack.py) see everything that is drawn."""
+    template = PORTS / "unity_authored"
+    if not template.is_dir():
+        fail(f"missing template folder {template}")
+    project = read_unity_project()
+    version = unity_version or project["editorVersion"] or "2020.1.1f1"
+    reset_output_dir(out)
+    shutil.copytree(template, out, dirs_exist_ok=True)
+    (out / "Packages").mkdir(exist_ok=True)
+    (out / "Packages" / "manifest.json").write_text(
+        json.dumps({"dependencies": UNITY_MINI_PACKAGES}, indent=2) + "\n", encoding="utf-8")
+    (out / "ProjectSettings").mkdir(exist_ok=True)
+    (out / "ProjectSettings" / "ProjectVersion.txt").write_text(f"m_EditorVersion: {version}\n")
+    (out / "ProjectSettings" / "TagManager.asset").write_text(TAG_MANAGER.format(
+        tags="\n".join(f"  - {t}" for t in AUTHORED_TAGS), layers="\n".join("  -" for _ in range(32))),
+        encoding="utf-8", newline="\n")
+    (out / ".gitignore").write_text(UNITY_GITIGNORE)
+
+    tuning = {n: float(v) for n, v, _ in read_tuning()}
+    level_file = PORTS / "common" / "mini_level.json"
+    data = scene_level_data(scene) if scene else expand_level(json.loads(level_file.read_text(encoding="utf-8")))
+    atlas = build_atlas(data)
+    groups = atlas["groups"]
+
+    # one PNG per sprite, cut from the atlas, with an import meta that sets pixels-per-unit from its draw scale
+    sprite_dir = out / "Assets" / "KailiusAuthored" / "Sprites"
+    sprite_dir.mkdir(parents=True, exist_ok=True)
+    width = atlas["width"]
+    guids: Dict[str, str] = {}
+    for spr in atlas["sprites"]:
+        rows = b"".join(bytes(atlas["pixels"][((spr["y"] + r) * width + spr["x"]) * 4:
+                                              ((spr["y"] + r) * width + spr["x"] + spr["w"]) * 4])
+                        for r in range(spr["h"]))
+        write_png(sprite_dir / (spr["name"] + ".png"), spr["w"], spr["h"], rows)
+        guids[spr["name"]] = hashlib.md5(("kailius-authored/" + spr["name"]).encode()).hexdigest()
+        ppu = 32.0 / spr["scale"]
+        (sprite_dir / (spr["name"] + ".png.meta")).write_text(
+            SPRITE_META.format(guid=guids[spr["name"]], ppu=f"{ppu:g}"), encoding="utf-8", newline="\n")
+    write_script_metas(out / "Assets" / "KailiusAuthored")
+    frame = lambda key, i=0: atlas["sprites"][groups[key][0] + i]["name"]
+    # script guids follow write_script_metas(folder): the path relative to the folder it was given
+    w = SceneWriter(lambda n: guids[n], lambda n: hashlib.md5(f"kailius-mini/Scripts/{n}.cs".encode()).hexdigest())
+
+    solids = data["solids"]
+    one_way = data.get("oneWay") or [False] * len(solids)
+    for (x, y, sw, sh), flat in zip(solids, [not o for o in one_way]):
+        w.game_object("Ground" if flat else "Platform", x + sw / 2, y + sh / 2, sw, sh, tag="Ground",
+                      sprite=frame("tiles", 4), box=(1, 1))
+        w.game_object("Grass", x + sw / 2, y + sh - 0.5, sw, 1, sprite=frame("tiles", 1), order=1)
+    for cx, cy in data["coins"]:
+        w.game_object("Coin", cx, cy, tag="Coin", sprite=frame("coin"), circle=0.4, trigger=True)
+    for x, y, kind in data["enemies"]:
+        d = data["kinds"][kind]
+        under = [s for s in solids if s[0] <= x <= s[0] + s[2] and s[1] + s[3] <= y + 0.5]
+        floor = max(under, key=lambda s: s[1] + s[3]) if under else (x - 3, 0, 6, 0)
+        w.game_object("Enemy_" + d["kind"], x, y, tag="Enemy", sprite=frame("enemy:" + d["kind"]), order=2,
+                      body={"gravity": d["gravityScale"]}, box=(d["width"], d["height"]),
+                      script="AuthoredEnemy",
+                      fields={"speed": d["speed"], "minX": f"{floor[0] + 0.8:.3f}",
+                              "maxX": f"{floor[0] + floor[2] - 0.8:.3f}", "direction": 1})
+    for hx, hy, hw, hh in data["hazards"]:
+        w.game_object("Hazard", hx + hw / 2, hy + hh / 2, tag="Hazard", box=(hw, hh), trigger=True)
+    for tx, ty, ref in data["hazardTiles"]:
+        w.game_object("Trap", tx, ty, sprite=frame(f"trap:{ref[0]}:{ref[1]}"), order=1)
+    for tx, ty in data["torches"]:
+        w.game_object("TorchStick", tx + tuning.get("TorchStickX", 0), ty + tuning.get("TorchStickY", 0),
+                      sprite=frame("torch_stick"), order=1)
+        w.game_object("TorchFlame", tx + tuning.get("TorchFlameX", 0), ty + tuning.get("TorchFlameY", 0),
+                      sprite=frame("torch_flame"), order=2)
+    px, py = data["portal"]
+    w.game_object("Portal", px, py, tag="Finish", sprite=frame("portal"), order=1, box=(2, 3), trigger=True)
+    sx, sy = data["spawn"]
+    player = w.game_object(
+        "Player", sx, sy, tag="Player", sprite=frame("player_idle"), order=3,
+        body={"gravity": tuning["PlayerGravityScale"], "drag": tuning["PlayerDrag"]},
+        box=(tuning["PlayerW"], tuning["PlayerH"]), script="AuthoredPlayer",
+        fields={"speed": tuning["MoveSpeed"], "jumpSpeed": tuning["JumpSpeed"], "spawnX": sx, "spawnY": sy,
+                "jumpsLeft": 2, "score": 0, "respawnBelow": -12})
+    camera = AUTHORED_SCENE_CAMERA.format(go=900, tf=901, cam=902, mb=903, script=w.script_guid("AuthoredCamera"),
+                                          target=player)
+    scene_dir = out / "Assets" / "Scenes"
+    scene_dir.mkdir(parents=True, exist_ok=True)
+    (scene_dir / "KailiusAuthored.unity").write_text(
+        "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n" + camera + "".join(w.parts), encoding="utf-8", newline="\n")
+    log(f"generated authored Unity project ({version}): {w.roots} GameObjects, {len(atlas['sprites'])} sprites")
+    log(f"  project: {out}")
+    return out
+
+
 def mini_unity(args: argparse.Namespace) -> Path:
+    if getattr(args, 'authored', False):
+        return build_unity_authored(args.out or DEFAULT_UNITY_OUT.with_name(DEFAULT_UNITY_OUT.name + '-authored'),
+                                    args.unity_version, getattr(args, 'scene', None))
     return build_unity_mini(args.out or DEFAULT_UNITY_OUT, args.unity_version, args.build,
                             args.unity_editor, args.build_target, getattr(args, 'scene', None))
 
@@ -1798,6 +2104,8 @@ def add_mini_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--unity-editor", help="path to the Unity executable (or set UNITY_EDITOR)")
     parser.add_argument("--build-target", default=default_build_target(),
                         choices=["linux64", "win64", "osx"], help="player platform for unity --build")
+    parser.add_argument("--authored", action="store_true", help="unity: write the level as authored GameObjects "
+                        "in the scene (SpriteRenderer, Rigidbody2D, colliders) instead of building it at run time")
     parser.add_argument("--scene", help="build this Unity scene (e.g. Scene_1) instead of the "
                         "hand-made mini level")
     parser.add_argument("--prowl2d", help="path to a Prowl2D checkout for prowl2d --build "
